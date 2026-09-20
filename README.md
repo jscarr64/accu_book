@@ -11,8 +11,8 @@ Headless notebook core for the Accumath project family. Pure Rust. No GUI in thi
 | 1 Document model | **done** (Eugene APPROVE) | cells, order, metadata, blake3 content hashes, JSON serde |
 | 2 State | **done** (Eugene APPROVE) | snapshot undo/redo via `History` |
 | 3 DAG | **done** (Eugene APPROVE) | explicit deps + stale invalidation |
-| 4 Jobs | **in progress** | local FIFO eval queue, cancel, typed errors |
-| 5 Engine bridge | planned | trait only (simplify/solve/to_latex/assumptions) — no proprietary engine inside this crate |
+| 4 Jobs | **done** (Eugene APPROVE) | local FIFO eval queue, cancel, typed errors |
+| 5 Engine bridge | **in progress** | `EngineBridge` trait + Null/Echo doubles — no Accumath in this crate |
 | egui shell | later | desktop UI with other Accumath UI work |
 
 ## Anti-Jupyter bar
@@ -36,6 +36,15 @@ Headless notebook core for the Accumath project family. Pure Rust. No GUI in thi
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
+
+## Slice 5 — `EngineBridge`
+
+Trait only — Accumath stays out of this crate:
+
+- `simplify` / `solve` / `to_latex` / `assumptions`
+- `NullEngine` (all Unsupported) and `EchoEngine` (test double)
+- `eval_cell_with` helper for job workers
+- Hosts implement the trait (IPC / linked proprietary engine later)
 
 ## Slice 4 — `JobQueue`
 

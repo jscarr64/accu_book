@@ -1,10 +1,12 @@
 mod history;
 mod dag;
 mod jobs;
+mod engine;
 
 pub use history::History;
 pub use dag::{DepGraph, DepError};
 pub use jobs::{Job, JobError, JobId, JobQueue, JobStatus};
+pub use engine::{EchoEngine, EngineBridge, EngineError, EngineOp, EngineResult, NullEngine, eval_cell_with};
 
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
