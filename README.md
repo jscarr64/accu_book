@@ -37,6 +37,15 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+## Session façade
+
+`Session<E: EngineBridge>` wires History + DepGraph + JobQueue + engine + `ResultStore`.
+
+- `edit` / `undo` / `redo` — history + dep sync + stale marks
+- `enqueue` / `run_one` / `run_all` — engine eval; results live in the session only
+- `chrome(cell)` — Idle / Stale / Queued / Running / Ready / Failed
+- Display must not own eval output
+
 ## Slice 5 — `EngineBridge`
 
 Trait only — Accumath stays out of this crate:

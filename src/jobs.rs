@@ -102,6 +102,22 @@ impl JobQueue {
         self.jobs.get(&id)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &Job> {
+        self.jobs.values()
+    }
+
+    pub fn is_cell_queued(&self, cell: &CellId) -> bool {
+        self.jobs.values().any(|j| {
+            j.cell == *cell && matches!(j.status, JobStatus::Queued)
+        })
+    }
+
+    pub fn is_cell_running(&self, cell: &CellId) -> bool {
+        self.running
+            .and_then(|id| self.jobs.get(&id))
+            .is_some_and(|j| j.cell == *cell)
+    }
+
     /// Enqueue an eval for `cell`. Returns the new job id.
     pub fn enqueue(&mut self, cell: CellId) -> JobId {
         self.next_id = self.next_id.saturating_add(1);

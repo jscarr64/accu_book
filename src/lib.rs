@@ -2,11 +2,13 @@ mod history;
 mod dag;
 mod jobs;
 mod engine;
+mod session;
 
 pub use history::History;
 pub use dag::{DepGraph, DepError};
 pub use jobs::{Job, JobError, JobId, JobQueue, JobStatus};
 pub use engine::{EchoEngine, EngineBridge, EngineError, EngineOp, EngineResult, NullEngine, eval_cell_with};
+pub use session::{CellChrome, ResultStore, Session, SessionError, StoredOutput};
 
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
