@@ -1,6 +1,8 @@
 mod history;
+mod dag;
 
 pub use history::History;
+pub use dag::{DepGraph, DepError};
 
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
@@ -8,7 +10,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 pub struct CellId(Uuid);
 
 impl fmt::Display for CellId {

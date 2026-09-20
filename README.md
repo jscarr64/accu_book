@@ -9,8 +9,8 @@ Headless notebook core for the Accumath project family. Pure Rust. No GUI in thi
 | Slice | Status | What |
 |------|--------|------|
 | 1 Document model | **done** (Eugene APPROVE) | cells, order, metadata, blake3 content hashes, JSON serde |
-| 2 State | **in progress** | snapshot undo/redo via `History` |
-| 3 DAG | planned | cell dependency / invalidation |
+| 2 State | **done** (Eugene APPROVE) | snapshot undo/redo via `History` |
+| 3 DAG | **in progress** | explicit deps + stale invalidation |
 | 4 Jobs | planned | local eval queue, cancel, typed errors |
 | 5 Engine bridge | planned | trait only (simplify/solve/to_latex/assumptions) — no proprietary engine inside this crate |
 | egui shell | later | desktop UI with other Accumath UI work |
@@ -36,6 +36,15 @@ Headless notebook core for the Accumath project family. Pure Rust. No GUI in thi
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
+
+## Slice 3 — `DepGraph`
+
+Explicit cell dependencies (no hidden kernel inference):
+
+- `sync_notebook` / `ensure_cell` / `remove_cell`
+- `set_dependencies` (rejects unknown ids and cycles)
+- `mark_changed` marks the cell and transitive dependents stale
+- `topological_order` for eval order
 
 ## Slice 2 — `History`
 
