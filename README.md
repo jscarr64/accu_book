@@ -12,7 +12,7 @@ Headless notebook core for the Accumath project family. Pure Rust. No GUI in thi
 | 2 State | **done** (Eugene APPROVE) | snapshot undo/redo via `History` |
 | 3 DAG | **done** (Eugene APPROVE) | explicit deps + stale invalidation |
 | 4 Jobs | **done** (Eugene APPROVE) | local FIFO eval queue, cancel, typed errors |
-| 5 Engine bridge | **in progress** | `EngineBridge` trait + Null/Echo doubles — no Accumath in this crate |
+| 5 Engine bridge | **done** (Eugene APPROVE) | `EngineBridge` trait + Null/Echo doubles — no Accumath in this crate |
 | egui shell | later | desktop UI with other Accumath UI work |
 
 ## Anti-Jupyter bar
