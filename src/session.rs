@@ -264,14 +264,23 @@ impl<E: EngineBridge> Session<E> {
         if self.jobs.is_cell_queued(id) {
             return CellChrome::Queued;
         }
+        let current_hash = self.notebook().get_by_id(id).map(cell_content_hash);
+        if let (Some(out), Some(hash)) = (self.results.get(id), current_hash.as_ref()) {
+            if out.content_hash() != hash {
+                return CellChrome::Stale;
+            }
+        }
+        if let Some(StoredOutput::Failure { message, .. }) = self.results.get(id) {
+            return CellChrome::Failed {
+                message: message.clone(),
+            };
+        }
         if self.deps.is_stale(id) {
             return CellChrome::Stale;
         }
         match self.results.get(id) {
             Some(StoredOutput::Success { .. }) => CellChrome::Ready,
-            Some(StoredOutput::Failure { message, .. }) => CellChrome::Failed {
-                message: message.clone(),
-            },
+            Some(StoredOutput::Failure { .. }) => unreachable!("handled above"),
             None => CellChrome::Idle,
         }
     }
@@ -352,16 +361,34 @@ mod tests {
         let mut s = Session::new(NullEngine);
         s.edit(|nb| nb.append(Cell::new_code("x".into())));
         let id = s.notebook().cells()[0].id();
-        s.deps.clear_all_stale();
+        assert_eq!(s.chrome(&id), CellChrome::Stale);
         s.enqueue(id).unwrap();
         s.run_one().unwrap().1.unwrap();
-        assert!(matches!(s.chrome(&id), CellChrome::Failed { .. }));
+        // Failed must win over graph stale after a real edit→enqueue→fail path
+        assert!(matches!(s.chrome(&id), CellChrome::Failed { message } if message.contains("unsupported")));
         assert!(matches!(
             s.results().get(&id),
             Some(StoredOutput::Failure { .. })
         ));
-        // failure does not clear stale if we re-mark — actually we never marked; cell was cleared
-        // After edit it was stale; we cleared all; failure should leave not-Ready
+    }
+
+    #[test]
+    fn edit_away_from_success_is_stale_not_ready() {
+        let mut s = Session::new(EchoEngine);
+        s.edit(|nb| nb.append(Cell::new_code("a".into())));
+        let id = s.notebook().cells()[0].id();
+        s.enqueue(id).unwrap();
+        s.run_all();
+        assert_eq!(s.chrome(&id), CellChrome::Ready);
+        s.edit(|nb| {
+            let id = nb.cells()[0].id();
+            nb.set_source(&id, "b".into()).unwrap();
+        });
+        assert_eq!(s.chrome(&id), CellChrome::Stale);
+        assert!(matches!(
+            s.results().get(&id),
+            Some(StoredOutput::Success { .. })
+        ));
     }
 
     #[test]

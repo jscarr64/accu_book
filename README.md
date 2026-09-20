@@ -43,7 +43,8 @@ cargo clippy --all-targets -- -D warnings
 
 - `edit` / `undo` / `redo` — history + dep sync + stale marks
 - `enqueue` / `run_one` / `run_all` — engine eval; results live in the session only
-- `chrome(cell)` — Idle / Stale / Queued / Running / Ready / Failed
+- `chrome(cell)` — Idle / Stale / Queued / Running / Ready / Failed (Running/Queued, then hash mismatch→Stale, then Failure, then graph stale, then Ready)
+- egui must drive cell chrome from `chrome()` — not from `results()` alone
 - Display must not own eval output
 
 ## Slice 5 — `EngineBridge`
