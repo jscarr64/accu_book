@@ -61,6 +61,8 @@ impl DepGraph {
         if !self.deps.contains_key(id) {
             return false;
         }
+        // Dependents must go stale — deleting an input is not a silent refresh.
+        self.mark_changed(id);
         if let Some(deps) = self.deps.remove(id) {
             for dep in deps {
                 if let Some(set) = self.dependents.get_mut(&dep) {
@@ -130,6 +132,7 @@ impl DepGraph {
             self.deps.insert(id, old_deps);
             return Err(DepError::Cycle);
         }
+        self.mark_changed(&id);
         Ok(())
     }
 
@@ -318,5 +321,43 @@ mod tests {
         let mut g = DepGraph::new();
         g.ensure_cell(a);
         assert_eq!(g.set_dependencies(a, [ghost]), Err(DepError::UnknownCell));
+    }
+
+    #[test]
+    fn remove_cell_stales_former_dependents() {
+        let mut nb = Notebook::new();
+        nb.append(Cell::new_code("a".into()));
+        nb.append(Cell::new_code("b".into()));
+        let a = nb.cells()[0].id();
+        let b = nb.cells()[1].id();
+        let mut g = DepGraph::new();
+        g.sync_notebook(&nb);
+        g.set_dependencies(b, [a]).unwrap();
+        g.clear_all_stale();
+        assert!(!g.is_stale(&b));
+        assert!(g.remove_cell(&a));
+        assert!(!g.contains(&a));
+        assert!(g.is_stale(&b));
+        assert!(!g.is_stale(&a));
+    }
+
+    #[test]
+    fn set_dependencies_success_marks_stale() {
+        let mut nb = Notebook::new();
+        nb.append(Cell::new_code("a".into()));
+        nb.append(Cell::new_code("b".into()));
+        nb.append(Cell::new_code("c".into()));
+        let a = nb.cells()[0].id();
+        let b = nb.cells()[1].id();
+        let c = nb.cells()[2].id();
+        let mut g = DepGraph::new();
+        g.sync_notebook(&nb);
+        g.set_dependencies(b, [a]).unwrap();
+        g.set_dependencies(c, [b]).unwrap();
+        g.clear_all_stale();
+        g.set_dependencies(b, []).unwrap();
+        assert!(g.is_stale(&b));
+        assert!(g.is_stale(&c));
+        assert!(!g.is_stale(&a));
     }
 }
