@@ -1,8 +1,10 @@
 mod history;
 mod dag;
+mod jobs;
 
 pub use history::History;
 pub use dag::{DepGraph, DepError};
+pub use jobs::{Job, JobError, JobId, JobQueue, JobStatus};
 
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
