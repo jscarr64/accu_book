@@ -1,3 +1,7 @@
+mod history;
+
+pub use history::History;
+
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

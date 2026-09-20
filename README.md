@@ -8,8 +8,8 @@ Headless notebook core for the Accumath project family. Pure Rust. No GUI in thi
 
 | Slice | Status | What |
 |------|--------|------|
-| 1 Document model | **in progress / first cut** | cells, order, metadata, blake3 content hashes, JSON serde |
-| 2 State | planned | undo/redo or snapshots |
+| 1 Document model | **done** (Eugene APPROVE) | cells, order, metadata, blake3 content hashes, JSON serde |
+| 2 State | **in progress** | snapshot undo/redo via `History` |
 | 3 DAG | planned | cell dependency / invalidation |
 | 4 Jobs | planned | local eval queue, cancel, typed errors |
 | 5 Engine bridge | planned | trait only (simplify/solve/to_latex/assumptions) — no proprietary engine inside this crate |
@@ -36,6 +36,14 @@ Headless notebook core for the Accumath project family. Pure Rust. No GUI in thi
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
+
+## Slice 2 — `History`
+
+Snapshot undo/redo around a present `Notebook`:
+
+- `History::apply(|nb| { ... })` / `replace(notebook)` — records undo, clears redo
+- `undo` / `redo` / `can_undo` / `can_redo`
+- Default undo depth 100 (`with_limit`)
 
 ## Related open crates
 
