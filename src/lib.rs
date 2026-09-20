@@ -2,7 +2,7 @@ use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
-use uuid::{self, Uuid};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct CellId(Uuid);
@@ -19,6 +19,12 @@ impl From<Uuid> for CellId {
     }
 }
 
+impl CellId {
+    pub fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CellKind {
@@ -26,7 +32,16 @@ pub enum CellKind {
     Markdown,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl CellKind {
+    fn tag(self) -> &'static str {
+        match self {
+            CellKind::Code => "code",
+            CellKind::Markdown => "markdown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cell {
     id: CellId,
     kind: CellKind,
@@ -37,7 +52,7 @@ pub struct Cell {
 impl Cell {
     pub fn new_code(source: String) -> Self {
         Cell {
-            id: CellId(uuid::Uuid::new_v4()),
+            id: CellId(Uuid::new_v4()),
             kind: CellKind::Code,
             source,
             metadata: BTreeMap::new(),
@@ -46,15 +61,31 @@ impl Cell {
 
     pub fn new_markdown(source: String) -> Self {
         Cell {
-            id: CellId(uuid::Uuid::new_v4()),
+            id: CellId(Uuid::new_v4()),
             kind: CellKind::Markdown,
             source,
             metadata: BTreeMap::new(),
         }
     }
+
+    pub fn id(&self) -> CellId {
+        self.id
+    }
+
+    pub fn kind(&self) -> CellKind {
+        self.kind
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn metadata(&self) -> &BTreeMap<String, String> {
+        &self.metadata
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notebook {
     cells: Vec<Cell>,
 }
@@ -76,6 +107,18 @@ impl Notebook {
 
     pub fn is_empty(&self) -> bool {
         self.cells.is_empty()
+    }
+
+    pub fn cells(&self) -> &[Cell] {
+        &self.cells
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Cell> {
+        self.cells.iter()
+    }
+
+    pub fn cell_ids(&self) -> Vec<CellId> {
+        self.cells.iter().map(|c| c.id).collect()
     }
 
     pub fn get(&self, index: usize) -> Option<&Cell> {
@@ -126,7 +169,20 @@ impl Notebook {
         }
     }
 
-    pub fn set_metadata(&mut self, id: &CellId, metadata: BTreeMap<String, String>) -> Result<(), NotebookError> {
+    pub fn set_kind(&mut self, id: &CellId, kind: CellKind) -> Result<(), NotebookError> {
+        if let Some(cell) = self.cells.iter_mut().find(|cell| &cell.id == id) {
+            cell.kind = kind;
+            Ok(())
+        } else {
+            Err(NotebookError::UnknownCellId)
+        }
+    }
+
+    pub fn set_metadata(
+        &mut self,
+        id: &CellId,
+        metadata: BTreeMap<String, String>,
+    ) -> Result<(), NotebookError> {
         if let Some(cell) = self.cells.iter_mut().find(|cell| &cell.id == id) {
             cell.metadata = metadata;
             Ok(())
@@ -144,19 +200,36 @@ pub enum NotebookError {
     UnknownCellId,
 }
 
+/// Canonical cell content bytes for hashing (excludes id):
+/// `kind_tag \0 source \0` then each metadata entry in `BTreeMap` order as `key \0 value \0`.
+/// `kind_tag` is `code` or `markdown`.
+fn update_cell_content(hasher: &mut Hasher, cell: &Cell) {
+    hasher.update(cell.kind.tag().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(cell.source.as_bytes());
+    hasher.update(b"\0");
+    for (k, v) in &cell.metadata {
+        hasher.update(k.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(v.as_bytes());
+        hasher.update(b"\0");
+    }
+}
+
+/// Blake3 hex of cell kind + source + metadata (see `update_cell_content`).
 pub fn cell_content_hash(cell: &Cell) -> String {
     let mut hasher = Hasher::new();
-    hasher.update(cell.source.as_bytes());
+    update_cell_content(&mut hasher, cell);
     hasher.finalize().to_hex().to_string()
 }
 
+/// Blake3 hex over each cell in order: `uuid_16 \0` + same bytes as [`cell_content_hash`].
 pub fn notebook_content_hash(nb: &Notebook) -> String {
     let mut hasher = Hasher::new();
     for cell in &nb.cells {
         hasher.update(cell.id.0.as_bytes());
         hasher.update(b"\0");
-        hasher.update(cell.source.as_bytes());
-        hasher.update(b"\0");
+        update_cell_content(&mut hasher, cell);
     }
     hasher.finalize().to_hex().to_string()
 }
@@ -169,14 +242,22 @@ mod tests {
     fn empty() {
         let nb = Notebook::new();
         assert_eq!(nb.len(), 0);
+        assert!(nb.cells().is_empty());
+        assert!(nb.cell_ids().is_empty());
     }
 
     #[test]
-    fn append_two() {
+    fn append_two_public_read() {
         let mut nb = Notebook::new();
         nb.append(Cell::new_code("1".to_string()));
         nb.append(Cell::new_markdown("2".to_string()));
         assert_eq!(nb.len(), 2);
+        assert_eq!(nb.cells()[0].kind(), CellKind::Code);
+        assert_eq!(nb.cells()[0].source(), "1");
+        assert_eq!(nb.cells()[1].kind(), CellKind::Markdown);
+        assert_eq!(nb.cell_ids().len(), 2);
+        assert_eq!(nb.iter().count(), 2);
+        assert!(nb.cells()[0].metadata().is_empty());
     }
 
     #[test]
@@ -192,8 +273,8 @@ mod tests {
         let mut nb = Notebook::new();
         nb.append(Cell::new_code("1".to_string()));
         nb.append(Cell::new_markdown("2".to_string()));
-        nb.remove(&CellId::from(uuid::Uuid::new_v4())).unwrap_err();
-        let id0 = nb.cells[0].id;
+        nb.remove(&CellId::from(Uuid::new_v4())).unwrap_err();
+        let id0 = nb.cells()[0].id();
         nb.remove(&id0).unwrap();
         assert_eq!(nb.len(), 1);
     }
@@ -204,8 +285,20 @@ mod tests {
         nb.append(Cell::new_code("1".to_string()));
         nb.append(Cell::new_markdown("2".to_string()));
         nb.move_cell(0, 1).unwrap();
-        assert_eq!(nb.cells[0].kind, CellKind::Markdown);
-        assert_eq!(nb.cells[1].kind, CellKind::Code);
+        assert_eq!(nb.cells()[0].kind(), CellKind::Markdown);
+        assert_eq!(nb.cells()[1].kind(), CellKind::Code);
+    }
+
+    #[test]
+    fn move_cell_three_from_lt_to() {
+        let mut nb = Notebook::new();
+        nb.append(Cell::new_code("a".to_string()));
+        nb.append(Cell::new_code("b".to_string()));
+        nb.append(Cell::new_code("c".to_string()));
+        nb.move_cell(0, 2).unwrap();
+        assert_eq!(nb.cells()[0].source(), "b");
+        assert_eq!(nb.cells()[1].source(), "c");
+        assert_eq!(nb.cells()[2].source(), "a");
     }
 
     #[test]
@@ -213,24 +306,74 @@ mod tests {
         let mut nb = Notebook::new();
         nb.append(Cell::new_code("1".to_string()));
         let old_hash = notebook_content_hash(&nb);
-        let id = nb.cells[0].id;
+        let id = nb.cells()[0].id();
         nb.set_source(&id, "2".to_string()).unwrap();
         let new_hash = notebook_content_hash(&nb);
         assert_ne!(old_hash, new_hash);
     }
 
     #[test]
-    fn json_roundtrip_preserves_ids_order_sources() {
+    fn cell_hash_deterministic_same_content() {
+        let mut nb = Notebook::new();
+        nb.append(Cell::new_code("x".to_string()));
+        let id = nb.cells()[0].id();
+        let mut meta = BTreeMap::new();
+        meta.insert("k".into(), "v".into());
+        nb.set_metadata(&id, meta).unwrap();
+        let h1 = cell_content_hash(&nb.cells()[0]);
+        let h2 = cell_content_hash(&nb.cells()[0]);
+        assert_eq!(h1, h2);
+        // rebuild identical content via JSON round-trip
+        let json = serde_json::to_string(&nb).unwrap();
+        let nb2: Notebook = serde_json::from_str(&json).unwrap();
+        assert_eq!(h1, cell_content_hash(&nb2.cells()[0]));
+        assert_eq!(notebook_content_hash(&nb), notebook_content_hash(&nb2));
+    }
+
+    #[test]
+    fn kind_change_flips_hashes() {
+        let mut nb = Notebook::new();
+        nb.append(Cell::new_code("same".to_string()));
+        let id = nb.cells()[0].id();
+        let cell_before = cell_content_hash(&nb.cells()[0]);
+        let nb_before = notebook_content_hash(&nb);
+        nb.set_kind(&id, CellKind::Markdown).unwrap();
+        assert_ne!(cell_before, cell_content_hash(&nb.cells()[0]));
+        assert_ne!(nb_before, notebook_content_hash(&nb));
+    }
+
+    #[test]
+    fn metadata_change_flips_hashes() {
+        let mut nb = Notebook::new();
+        nb.append(Cell::new_code("same".to_string()));
+        let id = nb.cells()[0].id();
+        let cell_before = cell_content_hash(&nb.cells()[0]);
+        let nb_before = notebook_content_hash(&nb);
+        let mut meta = BTreeMap::new();
+        meta.insert("lang".into(), "rust".into());
+        nb.set_metadata(&id, meta).unwrap();
+        assert_ne!(cell_before, cell_content_hash(&nb.cells()[0]));
+        assert_ne!(nb_before, notebook_content_hash(&nb));
+        assert_eq!(nb.cells()[0].metadata().get("lang").map(String::as_str), Some("rust"));
+    }
+
+    #[test]
+    fn json_roundtrip_preserves_ids_order_sources_metadata() {
         let mut nb = Notebook::new();
         nb.append(Cell::new_code("1".to_string()));
+        let id = nb.cells()[0].id();
+        let mut meta = BTreeMap::new();
+        meta.insert("a".into(), "b".into());
+        nb.set_metadata(&id, meta).unwrap();
         nb.append(Cell::new_markdown("2".to_string()));
         let json = serde_json::to_string(&nb).unwrap();
         let nb2: Notebook = serde_json::from_str(&json).unwrap();
-        assert_eq!(nb.cells.len(), nb2.cells.len());
-        for (cell1, cell2) in nb.cells.iter().zip(nb2.cells.iter()) {
-            assert_eq!(cell1.id, cell2.id);
-            assert_eq!(cell1.kind, cell2.kind);
-            assert_eq!(cell1.source, cell2.source);
+        assert_eq!(nb.cells().len(), nb2.cells().len());
+        for (cell1, cell2) in nb.iter().zip(nb2.iter()) {
+            assert_eq!(cell1.id(), cell2.id());
+            assert_eq!(cell1.kind(), cell2.kind());
+            assert_eq!(cell1.source(), cell2.source());
+            assert_eq!(cell1.metadata(), cell2.metadata());
         }
     }
 }

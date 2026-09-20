@@ -25,10 +25,12 @@ Headless notebook core for the Accumath project family. Pure Rust. No GUI in thi
 ## Slice 1 API (headless)
 
 - `CellId` (UUID v4), `CellKind` (`Code` \| `Markdown`), `Cell`, `Notebook`
-- Insert / append / remove / move / set_source / set_metadata
-- `cell_content_hash` — blake3 hex of cell source bytes
-- `notebook_content_hash` — blake3 hex over each cell in order: 16-byte UUID + NUL + source + NUL
-- JSON serde round-trip
+- Public read: `Cell::{id,kind,source,metadata}`; `Notebook::{cells,iter,cell_ids,get,get_by_id}`
+- Mutate: insert / append / remove / move / `set_source` / `set_kind` / `set_metadata`
+- Content hashes (blake3 hex), canonical layout:
+  - **cell:** `kind_tag \0 source \0` then each metadata entry in `BTreeMap` order as `key \0 value \0` (`kind_tag` is `code` or `markdown`)
+  - **notebook:** for each cell in order: `uuid_16 \0` + same bytes as the cell layout above
+- JSON serde round-trip (ids, order, kind, source, metadata)
 
 ```bash
 cargo test
