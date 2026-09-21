@@ -7,6 +7,7 @@ use crate::engine::{eval_cell_with, EngineBridge, EngineError, EngineOp, EngineR
 use crate::history::History;
 use crate::jobs::{JobError, JobId, JobQueue};
 use crate::{cell_content_hash, CellId, IntakePolicy, Notebook};
+use std::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Eval output kept by the session (not by the view).
@@ -77,6 +78,19 @@ pub enum CellChrome {
     Running,
     Ready,
     Failed { message: String },
+}
+
+impl fmt::Display for CellChrome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CellChrome::Idle => write!(f, "idle"),
+            CellChrome::Stale => write!(f, "stale"),
+            CellChrome::Queued => write!(f, "queued"),
+            CellChrome::Running => write!(f, "running"),
+            CellChrome::Ready => write!(f, "ready"),
+            CellChrome::Failed { message } => write!(f, "failed:{message}"),
+        }
+    }
 }
 
 /// Wired notebook session. `E` is typically Accumath-behind-IPC or a test double.
@@ -246,6 +260,18 @@ impl<E: EngineBridge> Session<E> {
 
     pub fn cancel(&mut self, id: JobId) -> Result<(), JobError> {
         self.jobs.cancel(id)
+    }
+
+    /// Promote the next queued job to Running (host-driven loop). Prefer [`Self::run_one`]
+    /// when the session should also call the engine.
+    pub fn begin_next_job(&mut self) -> Option<(JobId, CellId)> {
+        self.jobs.start_next()
+    }
+
+    /// Finish a job started with [`Self::begin_next_job`] without touching results.
+    /// Hosts that eval outside `run_one` should store outputs themselves, then call this.
+    pub fn complete_job(&mut self, id: JobId, result: Result<(), String>) -> Result<(), JobError> {
+        self.jobs.finish(id, result)
     }
 
     /// Start next job, run engine, store output; `clear_stale` only on success.
@@ -630,6 +656,59 @@ mod tests {
         assert_eq!(s.cell_bindings(&id), Some(["bind:b".to_string()].as_slice()));
         // purged on edit, and again at start of successful re-eval (empty then)
         assert!(s.engine().purged.iter().filter(|n| *n == "bind:a").count() >= 1);
+    }
+
+
+    /// Host chrome contract (S10): `chrome()` is the only status source for wrappers/CLI.
+    #[test]
+    fn chrome_covers_idle_stale_queued_running_ready_failed() {
+        let mut s = Session::new(EchoEngine);
+        s.set_intake_policy(IntakePolicy::Inference);
+
+        // Idle: cell present, never run, not marked stale yet — append via edit marks stale.
+        // Fresh notebook cell without edit mark: use with_notebook.
+        let mut nb = Notebook::new();
+        nb.append(Cell::new_code("q".into()));
+        let id = nb.cells()[0].id();
+        let mut s_idle = Session::with_notebook(nb, EchoEngine);
+        s_idle.set_intake_policy(IntakePolicy::Inference);
+        assert_eq!(s_idle.chrome(&id), CellChrome::Idle);
+        assert_eq!(s_idle.chrome(&id).to_string(), "idle");
+
+        // Stale after edit
+        s.edit(|nb| nb.append(Cell::new_code("a".into())));
+        let id = s.notebook().cells()[0].id();
+        assert_eq!(s.chrome(&id), CellChrome::Stale);
+        assert_eq!(s.chrome(&id).to_string(), "stale");
+
+        // Queued
+        s.enqueue(id).unwrap();
+        assert_eq!(s.chrome(&id), CellChrome::Queued);
+        assert_eq!(s.chrome(&id).to_string(), "queued");
+
+        // Running
+        let (jid, cell) = s.begin_next_job().unwrap();
+        assert_eq!(cell, id);
+        assert_eq!(s.chrome(&id), CellChrome::Running);
+        assert_eq!(s.chrome(&id).to_string(), "running");
+        s.complete_job(jid, Ok(())).unwrap();
+
+        // Ready via run_one path (re-enqueue after complete without results → still need eval)
+        s.set_dependencies(id, []).unwrap();
+        s.enqueue(id).unwrap();
+        s.run_all();
+        assert_eq!(s.chrome(&id), CellChrome::Ready);
+        assert_eq!(s.chrome(&id).to_string(), "ready");
+
+        // Failed
+        let mut sf = Session::new(NullEngine);
+        sf.set_intake_policy(IntakePolicy::Inference);
+        sf.edit(|nb| nb.append(Cell::new_code("z".into())));
+        let fid = sf.notebook().cells()[0].id();
+        sf.enqueue(fid).unwrap();
+        sf.run_all();
+        assert!(matches!(sf.chrome(&fid), CellChrome::Failed { .. }));
+        assert!(sf.chrome(&fid).to_string().starts_with("failed:"));
     }
 
 }

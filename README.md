@@ -122,3 +122,11 @@ Session results, job queue, and chrome are not written.
 ## Ghost bindings (S9)
 
 On cell edit, remove, or successful re-eval, `Session` calls `EngineBridge::purge_bindings` with names from the prior successful eval (`bindings_after_eval`). Default engines bind nothing; real hosts implement both hooks so Jupyter-style ghost variables cannot linger.
+
+## Host chrome (S10)
+
+For wrappers and CLI hosts, **`Session::chrome(cell_id)` is the only status source**. Do not invent parallel status from the job queue or result store.
+
+States: `idle` · `stale` · `queued` · `running` · `ready` · `failed:<message>` (`Display` on `CellChrome`).
+
+Typical loop: enqueue → `run_one` / `run_all` (or `begin_next_job` + host eval + `complete_job`) → print `chrome`.
