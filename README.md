@@ -103,12 +103,13 @@ accu 1
 
 CELL <uuid>
 KIND code|markdown
-META key value   # optional, repeatable
-SOURCE
-...cell source...
-ENDSOURCE
+META key value   # optional, repeatable; key has no spaces; value is one line
+SOURCE <byte_len>
+...exactly byte_len UTF-8 bytes of cell source...
 ENDCELL
 ```
+
+Source is length-prefixed so cell text may contain any UTF-8, including lines that look like delimiters.
 
 APIs: `encode_notebook` / `decode_notebook`, `save_notebook` / `load_notebook`.
 Session results, job queue, and chrome are not written.
