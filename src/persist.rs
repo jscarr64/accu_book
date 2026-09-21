@@ -6,7 +6,7 @@
 //! Source bodies are length-prefixed (`SOURCE <byte_len>`) so cell text may
 //! contain any UTF-8, including lines that look like delimiters.
 
-use crate::{Cell, CellId, CellKind, Notebook};
+use crate::{Cell, CellId, CellKind, IntakePolicy, Notebook};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -51,6 +51,9 @@ const MAGIC: &str = "accu 1";
 pub fn encode_notebook(nb: &Notebook) -> String {
     let mut out = String::new();
     out.push_str(MAGIC);
+    out.push('\n');
+    out.push_str("intake ");
+    out.push_str(nb.intake_policy().as_str());
     out.push('\n');
     out.push('\n');
     for cell in nb.iter() {
@@ -110,6 +113,22 @@ pub fn decode_notebook(text: &str) -> Result<Notebook, PersistError> {
     }
 
     let mut nb = Notebook::new();
+
+    // Optional file-level intake (default Explicit if omitted — S6 files).
+    if pos < bytes.len() {
+        let save = pos;
+        let line = take_line(bytes, &mut pos)?;
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("intake ") {
+            let policy = IntakePolicy::parse(rest).ok_or_else(|| {
+                PersistError::Format(format!("unknown intake `{rest}`"))
+            })?;
+            nb.set_intake_policy(policy);
+        } else {
+            pos = save;
+        }
+    }
+
     loop {
         // skip blank lines
         loop {
@@ -284,6 +303,40 @@ mod tests {
         let nb2 = decode_notebook(&encode_notebook(&nb)).unwrap();
         assert_eq!(nb.get(0).unwrap().source(), "a\nb\nc");
         assert_eq!(nb, nb2);
+    }
+
+    #[test]
+    fn intake_policy_round_trip() {
+        for policy in [IntakePolicy::Explicit, IntakePolicy::Inference] {
+            let mut nb = Notebook::new();
+            nb.set_intake_policy(policy);
+            nb.append(Cell::new_code("1".into()));
+            let nb2 = decode_notebook(&encode_notebook(&nb)).unwrap();
+            assert_eq!(nb2.intake_policy(), policy);
+            assert_eq!(nb, nb2);
+        }
+    }
+
+    #[test]
+    fn missing_intake_line_defaults_explicit() {
+        let mut nb = Notebook::new();
+        nb.append(Cell::new_code("x".into()));
+        let full = encode_notebook(&nb);
+        // Drop the `intake …` line (S6-shaped files).
+        let mut out = String::from("accu 1\n\n");
+        let mut skip_intake = true;
+        for line in full.lines().skip(1) {
+            if skip_intake && line.starts_with("intake ") {
+                skip_intake = false;
+                continue;
+            }
+            skip_intake = false;
+            out.push_str(line);
+            out.push('\n');
+        }
+        let nb2 = decode_notebook(&out).unwrap();
+        assert_eq!(nb2.intake_policy(), IntakePolicy::Explicit);
+        assert_eq!(nb2.len(), 1);
     }
 
     #[test]

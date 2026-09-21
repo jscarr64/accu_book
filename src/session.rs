@@ -6,7 +6,7 @@ use crate::dag::{DepError, DepGraph};
 use crate::engine::{eval_cell_with, EngineBridge, EngineError, EngineOp, EngineResult};
 use crate::history::History;
 use crate::jobs::{JobError, JobId, JobQueue};
-use crate::{cell_content_hash, CellId, Notebook};
+use crate::{cell_content_hash, CellId, IntakePolicy, Notebook};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Eval output kept by the session (not by the view).
@@ -68,21 +68,6 @@ impl ResultStore {
 }
 
 
-/// How undeclared cell dependencies are handled at enqueue time.
-///
-/// Does **not** change the DAG engine — only intake. Explicit (default) requires
-/// [`Session::set_dependencies`] before enqueue. Inference allows enqueue without
-/// a prior declaration; this crate does **not** invent dependency edges — a host
-/// that can analyze source may call `set_dependencies` itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum IntakePolicy {
-    /// Refuse enqueue until dependencies were explicitly set (empty set is fine).
-    #[default]
-    Explicit,
-    /// Allow enqueue without a prior `set_dependencies` call.
-    Inference,
-}
-
 /// Coarse cell chrome for UI (session is source of truth).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CellChrome {
@@ -102,7 +87,6 @@ pub struct Session<E: EngineBridge> {
     results: ResultStore,
     engine: E,
     default_op: EngineOp,
-    intake: IntakePolicy,
     /// Cells that have received at least one `set_dependencies` call.
     declared: BTreeSet<CellId>,
 }
@@ -122,7 +106,6 @@ impl<E: EngineBridge> Session<E> {
             results: ResultStore::default(),
             engine,
             default_op: EngineOp::Simplify,
-            intake: IntakePolicy::Explicit,
             declared: BTreeSet::new(),
         }
     }
@@ -136,11 +119,11 @@ impl<E: EngineBridge> Session<E> {
     }
 
     pub fn intake_policy(&self) -> IntakePolicy {
-        self.intake
+        self.notebook().intake_policy()
     }
 
     pub fn set_intake_policy(&mut self, policy: IntakePolicy) {
-        self.intake = policy;
+        self.history.apply(|nb| nb.set_intake_policy(policy));
     }
 
     /// True if `set_dependencies` was called for this cell at least once.
@@ -239,7 +222,7 @@ impl<E: EngineBridge> Session<E> {
         if self.notebook().get_by_id(&cell).is_none() {
             return Err(SessionError::UnknownCell);
         }
-        if self.intake == IntakePolicy::Explicit && !self.declared.contains(&cell) {
+        if self.intake_policy() == IntakePolicy::Explicit && !self.declared.contains(&cell) {
             return Err(SessionError::UndeclaredDependencies { cell });
         }
         Ok(self.jobs.enqueue(cell))
@@ -555,4 +538,21 @@ mod tests {
         s.set_dependencies(id, []).unwrap();
         s.enqueue(id).unwrap();
     }
+
+    #[test]
+    fn session_reopen_keeps_inference_policy() {
+        let mut s = Session::new(EchoEngine);
+        s.set_intake_policy(IntakePolicy::Inference);
+        s.edit(|nb| nb.append(Cell::new_code("z".into())));
+        let text = crate::encode_notebook(s.notebook());
+        let nb2 = crate::decode_notebook(&text).unwrap();
+        assert_eq!(nb2.intake_policy(), IntakePolicy::Inference);
+        let mut s2 = Session::with_notebook(nb2, EchoEngine);
+        assert_eq!(s2.intake_policy(), IntakePolicy::Inference);
+        let id = s2.notebook().cells()[0].id();
+        s2.enqueue(id).unwrap(); // undeclared OK under Inference
+        s2.run_all();
+        assert_eq!(s2.chrome(&id), CellChrome::Ready);
+    }
+
 }

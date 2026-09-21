@@ -9,7 +9,7 @@ pub use history::History;
 pub use dag::{DepGraph, DepError};
 pub use jobs::{Job, JobError, JobId, JobQueue, JobStatus};
 pub use engine::{EchoEngine, EngineBridge, EngineError, EngineOp, EngineResult, NullEngine, eval_cell_with};
-pub use session::{CellChrome, IntakePolicy, ResultStore, Session, SessionError, StoredOutput};
+pub use session::{CellChrome, ResultStore, Session, SessionError, StoredOutput};
 pub use persist::{decode_notebook, encode_notebook, load_notebook, save_notebook, PersistError};
 
 use blake3::Hasher;
@@ -36,6 +36,42 @@ impl From<Uuid> for CellId {
 impl CellId {
     pub fn as_uuid(&self) -> Uuid {
         self.0
+    }
+}
+
+
+/// How undeclared cell dependencies are handled at enqueue time.
+///
+/// Does **not** change the DAG engine — only intake. Explicit (default) requires
+/// `Session::set_dependencies` before enqueue. Inference allows enqueue without
+/// a prior declaration; this crate does **not** invent dependency edges — a host
+/// that can analyze source may call `set_dependencies` itself.
+///
+/// Stored on the [`Notebook`] and written into `.accu` so reopen keeps the same rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntakePolicy {
+    /// Refuse enqueue until dependencies were explicitly set (empty set is fine).
+    #[default]
+    Explicit,
+    /// Allow enqueue without a prior `set_dependencies` call.
+    Inference,
+}
+
+impl IntakePolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IntakePolicy::Explicit => "explicit",
+            IntakePolicy::Inference => "inference",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "explicit" => Some(IntakePolicy::Explicit),
+            "inference" => Some(IntakePolicy::Inference),
+            _ => None,
+        }
     }
 }
 
@@ -117,6 +153,8 @@ impl Cell {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notebook {
     cells: Vec<Cell>,
+    #[serde(default)]
+    intake: IntakePolicy,
 }
 
 impl Default for Notebook {
@@ -127,7 +165,18 @@ impl Default for Notebook {
 
 impl Notebook {
     pub fn new() -> Self {
-        Notebook { cells: Vec::new() }
+        Notebook {
+            cells: Vec::new(),
+            intake: IntakePolicy::Explicit,
+        }
+    }
+
+    pub fn intake_policy(&self) -> IntakePolicy {
+        self.intake
+    }
+
+    pub fn set_intake_policy(&mut self, policy: IntakePolicy) {
+        self.intake = policy;
     }
 
     pub fn len(&self) -> usize {

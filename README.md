@@ -100,6 +100,7 @@ Headless save/load uses a plain-text UTF-8 `.accu` file (not JSON on disk):
 
 ```
 accu 1
+intake explicit|inference
 
 CELL <uuid>
 KIND code|markdown
@@ -116,4 +117,4 @@ Session results, job queue, and chrome are not written.
 
 ## Intake policy (S7)
 
-`Session` defaults to `IntakePolicy::Explicit`: a cell must get `set_dependencies` (empty is fine) before `enqueue`. `IntakePolicy::Inference` allows enqueue without a prior declaration. Switching policy does not change the DAG engine; this crate never invents dependency edges — Inference only relaxes the gate. Policy-on-disk lands in S8.
+`Session` defaults to `IntakePolicy::Explicit`: a cell must get `set_dependencies` (empty is fine) before `enqueue`. `IntakePolicy::Inference` allows enqueue without a prior declaration. Switching policy does not change the DAG engine; this crate never invents dependency edges — Inference only relaxes the gate. The policy is stored on the notebook and written as an `intake` line in `.accu`.
