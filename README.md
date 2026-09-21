@@ -93,3 +93,22 @@ Site: [accumath.net/open-source](https://www.accumath.net/open-source.html)
 ## License
 
 MIT OR Apache-2.0
+
+## `.accu` persistence (S6)
+
+Headless save/load uses a plain-text UTF-8 `.accu` file (not JSON on disk):
+
+```
+accu 1
+
+CELL <uuid>
+KIND code|markdown
+META key value   # optional, repeatable
+SOURCE
+...cell source...
+ENDSOURCE
+ENDCELL
+```
+
+APIs: `encode_notebook` / `decode_notebook`, `save_notebook` / `load_notebook`.
+Session results, job queue, and chrome are not written.

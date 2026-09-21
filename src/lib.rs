@@ -3,12 +3,14 @@ mod dag;
 mod jobs;
 mod engine;
 mod session;
+mod persist;
 
 pub use history::History;
 pub use dag::{DepGraph, DepError};
 pub use jobs::{Job, JobError, JobId, JobQueue, JobStatus};
 pub use engine::{EchoEngine, EngineBridge, EngineError, EngineOp, EngineResult, NullEngine, eval_cell_with};
 pub use session::{CellChrome, ResultStore, Session, SessionError, StoredOutput};
+pub use persist::{decode_notebook, encode_notebook, load_notebook, save_notebook, PersistError};
 
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
@@ -77,6 +79,21 @@ impl Cell {
             kind: CellKind::Markdown,
             source,
             metadata: BTreeMap::new(),
+        }
+    }
+
+    /// Reconstruct a cell with a known id (used by `.accu` load).
+    pub fn from_parts(
+        id: CellId,
+        kind: CellKind,
+        source: String,
+        metadata: BTreeMap<String, String>,
+    ) -> Self {
+        Cell {
+            id,
+            kind,
+            source,
+            metadata,
         }
     }
 
