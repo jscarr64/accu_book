@@ -8,41 +8,18 @@
 
 use crate::{Cell, CellId, CellKind, IntakePolicy, Notebook};
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use uuid::Uuid;
 
 /// Errors from reading or writing `.accu` files.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PersistError {
-    Io(io::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("invalid .accu: {0}")]
     Format(String),
-}
-
-impl fmt::Display for PersistError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PersistError::Io(e) => write!(f, "I/O error: {e}"),
-            PersistError::Format(msg) => write!(f, "invalid .accu: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for PersistError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            PersistError::Io(e) => Some(e),
-            PersistError::Format(_) => None,
-        }
-    }
-}
-
-impl From<io::Error> for PersistError {
-    fn from(value: io::Error) -> Self {
-        PersistError::Io(value)
-    }
 }
 
 const MAGIC: &str = "accu 1";

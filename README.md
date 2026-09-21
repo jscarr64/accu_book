@@ -130,3 +130,14 @@ For wrappers and CLI hosts, **`Session::chrome(cell_id)` is the only status sour
 States: `idle` · `stale` · `queued` · `running` · `ready` · `failed:<message>` (`Display` on `CellChrome`).
 
 Typical loop: enqueue → `run_one` / `run_all` (or `begin_next_job` + host eval + `complete_job`) → print `chrome`.
+
+## 1.0 API freeze
+
+Host-facing surface for the 1.0 line: [`docs/API_1_0.md`](docs/API_1_0.md).
+
+Try the smoke host:
+
+```bash
+cargo run --example echo_run
+cargo run --example echo_run -- /tmp/demo.accu
+```
