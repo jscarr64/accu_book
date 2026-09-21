@@ -89,6 +89,8 @@ pub struct Session<E: EngineBridge> {
     default_op: EngineOp,
     /// Cells that have received at least one `set_dependencies` call.
     declared: BTreeSet<CellId>,
+    /// Bindings attributed to each cell from the last successful eval.
+    cell_bindings: BTreeMap<CellId, Vec<String>>,
 }
 
 impl<E: EngineBridge> Session<E> {
@@ -107,6 +109,7 @@ impl<E: EngineBridge> Session<E> {
             engine,
             default_op: EngineOp::Simplify,
             declared: BTreeSet::new(),
+            cell_bindings: BTreeMap::new(),
         }
     }
 
@@ -155,6 +158,17 @@ impl<E: EngineBridge> Session<E> {
         &self.engine
     }
 
+    /// Bindings recorded for `id` from the last successful eval (test/hosts).
+    pub fn cell_bindings(&self, id: &CellId) -> Option<&[String]> {
+        self.cell_bindings.get(id).map(Vec::as_slice)
+    }
+
+    fn purge_cell_bindings(&mut self, id: &CellId) {
+        if let Some(names) = self.cell_bindings.remove(id) {
+            let _ = self.engine.purge_bindings(&names);
+        }
+    }
+
     /// Mutate the notebook under undo history; sync deps; mark content changes stale.
     pub fn edit<F>(&mut self, f: F)
     where
@@ -174,6 +188,7 @@ impl<E: EngineBridge> Session<E> {
         for id in before_ids.difference(&after_ids) {
             self.results.remove(id);
             self.declared.remove(id);
+            self.purge_cell_bindings(id);
         }
 
         let mut dirty: Vec<CellId> = Vec::new();
@@ -187,6 +202,7 @@ impl<E: EngineBridge> Session<E> {
             }
         }
         for id in dirty {
+            self.purge_cell_bindings(&id);
             self.deps.mark_changed(&id);
         }
     }
@@ -246,6 +262,11 @@ impl<E: EngineBridge> Session<E> {
             Ok(result) => {
                 let finish = self.jobs.finish(id, Ok(()));
                 if finish.is_ok() {
+                    self.purge_cell_bindings(&cell);
+                    let names = self.engine.bindings_after_eval(&source);
+                    if !names.is_empty() {
+                        self.cell_bindings.insert(cell, names);
+                    }
                     self.results.insert(
                         cell,
                         StoredOutput::Success {
@@ -321,6 +342,7 @@ impl<E: EngineBridge> Session<E> {
         for id in drop {
             self.results.remove(&id);
             self.declared.remove(&id);
+            self.purge_cell_bindings(&id);
         }
         let mut dirty: Vec<CellId> = Vec::new();
         let mut fresh: Vec<CellId> = Vec::new();
@@ -361,7 +383,7 @@ pub enum SessionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{EchoEngine, NullEngine};
+    use crate::engine::{EchoEngine, NullEngine, TrackingEngine};
     use crate::Cell;
 
     #[test]
@@ -553,6 +575,61 @@ mod tests {
         s2.enqueue(id).unwrap(); // undeclared OK under Inference
         s2.run_all();
         assert_eq!(s2.chrome(&id), CellChrome::Ready);
+    }
+
+
+    #[test]
+    fn edit_purges_prior_bindings() {
+        let mut s = Session::new(TrackingEngine::default());
+        s.set_intake_policy(IntakePolicy::Inference);
+        s.edit(|nb| nb.append(Cell::new_code("x+1".into())));
+        let id = s.notebook().cells()[0].id();
+        s.enqueue(id).unwrap();
+        s.run_all();
+        assert_eq!(s.cell_bindings(&id), Some(["bind:x".to_string()].as_slice()));
+        s.edit(|nb| {
+            let id = nb.cells()[0].id();
+            nb.set_source(&id, "y+1".into()).unwrap();
+        });
+        assert!(s.cell_bindings(&id).is_none());
+        assert_eq!(s.engine().purged, vec!["bind:x".to_string()]);
+    }
+
+    #[test]
+    fn remove_purges_prior_bindings() {
+        let mut s = Session::new(TrackingEngine::default());
+        s.set_intake_policy(IntakePolicy::Inference);
+        s.edit(|nb| nb.append(Cell::new_code("a".into())));
+        let id = s.notebook().cells()[0].id();
+        s.enqueue(id).unwrap();
+        s.run_all();
+        assert_eq!(s.cell_bindings(&id), Some(["bind:a".to_string()].as_slice()));
+        s.edit(|nb| {
+            let id = nb.cells()[0].id();
+            nb.remove(&id).unwrap();
+        });
+        assert!(s.cell_bindings(&id).is_none());
+        assert_eq!(s.engine().purged, vec!["bind:a".to_string()]);
+    }
+
+    #[test]
+    fn reeval_purges_old_then_binds_new() {
+        let mut s = Session::new(TrackingEngine::default());
+        s.set_intake_policy(IntakePolicy::Inference);
+        s.edit(|nb| nb.append(Cell::new_code("a".into())));
+        let id = s.notebook().cells()[0].id();
+        s.enqueue(id).unwrap();
+        s.run_all();
+        s.edit(|nb| {
+            let id = nb.cells()[0].id();
+            nb.set_source(&id, "b".into()).unwrap();
+        });
+        s.set_dependencies(id, []).unwrap();
+        s.enqueue(id).unwrap();
+        s.run_all();
+        assert_eq!(s.cell_bindings(&id), Some(["bind:b".to_string()].as_slice()));
+        // purged on edit, and again at start of successful re-eval (empty then)
+        assert!(s.engine().purged.iter().filter(|n| *n == "bind:a").count() >= 1);
     }
 
 }

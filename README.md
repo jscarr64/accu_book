@@ -118,3 +118,7 @@ Session results, job queue, and chrome are not written.
 ## Intake policy (S7)
 
 `Session` defaults to `IntakePolicy::Explicit`: a cell must get `set_dependencies` (empty is fine) before `enqueue`. `IntakePolicy::Inference` allows enqueue without a prior declaration. Switching policy does not change the DAG engine; this crate never invents dependency edges — Inference only relaxes the gate. The policy is stored on the notebook and written as an `intake` line in `.accu`.
+
+## Ghost bindings (S9)
+
+On cell edit, remove, or successful re-eval, `Session` calls `EngineBridge::purge_bindings` with names from the prior successful eval (`bindings_after_eval`). Default engines bind nothing; real hosts implement both hooks so Jupyter-style ghost variables cannot linger.

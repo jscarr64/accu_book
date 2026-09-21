@@ -39,6 +39,16 @@ pub trait EngineBridge {
     fn to_latex(&self, input: &str) -> Result<String, EngineError>;
     /// Assumption annotations for `input` (e.g. domain notes), as plain strings.
     fn assumptions(&self, input: &str) -> Result<Vec<String>, EngineError>;
+
+    /// Names this eval is considered to bind (host-defined). Default: none.
+    fn bindings_after_eval(&self, _source: &str) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Drop bindings so they cannot linger after edit/remove/re-eval (anti Jupyter-ghost).
+    fn purge_bindings(&mut self, _names: &[String]) -> Result<(), EngineError> {
+        Ok(())
+    }
 }
 
 /// Default test/offline engine: every op is [`EngineError::Unsupported`].
@@ -99,6 +109,39 @@ impl EngineBridge for EchoEngine {
 
     fn assumptions(&self, _input: &str) -> Result<Vec<String>, EngineError> {
         Ok(Vec::new())
+    }
+}
+
+
+/// Test double that records purge calls and binds one name per non-empty source:
+/// `bind:<first_char>` (e.g. source `"x+1"` → `["bind:x"]`).
+#[derive(Debug, Default, Clone)]
+pub struct TrackingEngine {
+    pub purged: Vec<String>,
+}
+
+impl EngineBridge for TrackingEngine {
+    fn simplify(&self, input: &str) -> Result<EngineResult, EngineError> {
+        EchoEngine.simplify(input)
+    }
+    fn solve(&self, input: &str) -> Result<EngineResult, EngineError> {
+        EchoEngine.solve(input)
+    }
+    fn to_latex(&self, input: &str) -> Result<String, EngineError> {
+        EchoEngine.to_latex(input)
+    }
+    fn assumptions(&self, input: &str) -> Result<Vec<String>, EngineError> {
+        EchoEngine.assumptions(input)
+    }
+    fn bindings_after_eval(&self, source: &str) -> Vec<String> {
+        match source.chars().next().filter(|c| !c.is_whitespace()) {
+            Some(c) => vec![format!("bind:{c}")],
+            None => Vec::new(),
+        }
+    }
+    fn purge_bindings(&mut self, names: &[String]) -> Result<(), EngineError> {
+        self.purged.extend(names.iter().cloned());
+        Ok(())
     }
 }
 
