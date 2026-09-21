@@ -113,3 +113,7 @@ Source is length-prefixed so cell text may contain any UTF-8, including lines th
 
 APIs: `encode_notebook` / `decode_notebook`, `save_notebook` / `load_notebook`.
 Session results, job queue, and chrome are not written.
+
+## Intake policy (S7)
+
+`Session` defaults to `IntakePolicy::Explicit`: a cell must get `set_dependencies` (empty is fine) before `enqueue`. `IntakePolicy::Inference` allows enqueue without a prior declaration. Switching policy does not change the DAG engine; this crate never invents dependency edges — Inference only relaxes the gate. Policy-on-disk lands in S8.

@@ -67,6 +67,22 @@ impl ResultStore {
     }
 }
 
+
+/// How undeclared cell dependencies are handled at enqueue time.
+///
+/// Does **not** change the DAG engine — only intake. Explicit (default) requires
+/// [`Session::set_dependencies`] before enqueue. Inference allows enqueue without
+/// a prior declaration; this crate does **not** invent dependency edges — a host
+/// that can analyze source may call `set_dependencies` itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IntakePolicy {
+    /// Refuse enqueue until dependencies were explicitly set (empty set is fine).
+    #[default]
+    Explicit,
+    /// Allow enqueue without a prior `set_dependencies` call.
+    Inference,
+}
+
 /// Coarse cell chrome for UI (session is source of truth).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CellChrome {
@@ -86,6 +102,9 @@ pub struct Session<E: EngineBridge> {
     results: ResultStore,
     engine: E,
     default_op: EngineOp,
+    intake: IntakePolicy,
+    /// Cells that have received at least one `set_dependencies` call.
+    declared: BTreeSet<CellId>,
 }
 
 impl<E: EngineBridge> Session<E> {
@@ -103,6 +122,8 @@ impl<E: EngineBridge> Session<E> {
             results: ResultStore::default(),
             engine,
             default_op: EngineOp::Simplify,
+            intake: IntakePolicy::Explicit,
+            declared: BTreeSet::new(),
         }
     }
 
@@ -112,6 +133,19 @@ impl<E: EngineBridge> Session<E> {
 
     pub fn default_op(&self) -> EngineOp {
         self.default_op
+    }
+
+    pub fn intake_policy(&self) -> IntakePolicy {
+        self.intake
+    }
+
+    pub fn set_intake_policy(&mut self, policy: IntakePolicy) {
+        self.intake = policy;
+    }
+
+    /// True if `set_dependencies` was called for this cell at least once.
+    pub fn dependencies_declared(&self, id: &CellId) -> bool {
+        self.declared.contains(id)
     }
 
     pub fn notebook(&self) -> &Notebook {
@@ -156,6 +190,7 @@ impl<E: EngineBridge> Session<E> {
         let after_ids: BTreeSet<CellId> = self.notebook().cell_ids().into_iter().collect();
         for id in before_ids.difference(&after_ids) {
             self.results.remove(id);
+            self.declared.remove(id);
         }
 
         let mut dirty: Vec<CellId> = Vec::new();
@@ -195,12 +230,17 @@ impl<E: EngineBridge> Session<E> {
         deps: impl IntoIterator<Item = CellId>,
     ) -> Result<(), DepError> {
         self.deps.ensure_cell(id);
-        self.deps.set_dependencies(id, deps)
+        self.deps.set_dependencies(id, deps)?;
+        self.declared.insert(id);
+        Ok(())
     }
 
     pub fn enqueue(&mut self, cell: CellId) -> Result<JobId, SessionError> {
         if self.notebook().get_by_id(&cell).is_none() {
             return Err(SessionError::UnknownCell);
+        }
+        if self.intake == IntakePolicy::Explicit && !self.declared.contains(&cell) {
+            return Err(SessionError::UndeclaredDependencies { cell });
         }
         Ok(self.jobs.enqueue(cell))
     }
@@ -297,6 +337,7 @@ impl<E: EngineBridge> Session<E> {
             .collect();
         for id in drop {
             self.results.remove(&id);
+            self.declared.remove(&id);
         }
         let mut dirty: Vec<CellId> = Vec::new();
         let mut fresh: Vec<CellId> = Vec::new();
@@ -324,6 +365,8 @@ impl<E: EngineBridge> Session<E> {
 pub enum SessionError {
     #[error("unknown cell")]
     UnknownCell,
+    #[error("cell {cell} has no declared dependencies under Explicit intake")]
+    UndeclaredDependencies { cell: CellId },
     #[error(transparent)]
     Job(#[from] JobError),
     #[error(transparent)]
@@ -344,6 +387,7 @@ mod tests {
         s.edit(|nb| nb.append(Cell::new_code("x+1".into())));
         let id = s.notebook().cells()[0].id();
         assert_eq!(s.chrome(&id), CellChrome::Stale);
+        s.set_dependencies(id, []).unwrap();
         s.enqueue(id).unwrap();
         assert_eq!(s.chrome(&id), CellChrome::Queued);
         let (_jid, res) = s.run_one().unwrap();
@@ -362,6 +406,7 @@ mod tests {
         s.edit(|nb| nb.append(Cell::new_code("x".into())));
         let id = s.notebook().cells()[0].id();
         assert_eq!(s.chrome(&id), CellChrome::Stale);
+        s.set_dependencies(id, []).unwrap();
         s.enqueue(id).unwrap();
         s.run_one().unwrap().1.unwrap();
         // Failed must win over graph stale after a real edit→enqueue→fail path
@@ -377,6 +422,7 @@ mod tests {
         let mut s = Session::new(EchoEngine);
         s.edit(|nb| nb.append(Cell::new_code("a".into())));
         let id = s.notebook().cells()[0].id();
+        s.set_dependencies(id, []).unwrap();
         s.enqueue(id).unwrap();
         s.run_all();
         assert_eq!(s.chrome(&id), CellChrome::Ready);
@@ -396,6 +442,7 @@ mod tests {
         let mut s = Session::new(EchoEngine);
         s.edit(|nb| nb.append(Cell::new_code("a".into())));
         let id = s.notebook().cells()[0].id();
+        s.set_dependencies(id, []).unwrap();
         s.enqueue(id).unwrap();
         s.run_all();
         assert_eq!(s.chrome(&id), CellChrome::Ready);
@@ -411,6 +458,7 @@ mod tests {
         let mut s = Session::new(EchoEngine);
         s.edit(|nb| nb.append(Cell::new_code("a".into())));
         let id = s.notebook().cells()[0].id();
+        s.set_dependencies(id, []).unwrap();
         s.enqueue(id).unwrap();
         s.run_all();
         assert_eq!(s.chrome(&id), CellChrome::Ready);
@@ -446,5 +494,65 @@ mod tests {
         });
         assert!(s.deps().is_stale(&b));
         assert!(s.results().get(&a).is_none());
+    }
+
+    #[test]
+    fn default_intake_is_explicit() {
+        let s = Session::new(EchoEngine);
+        assert_eq!(s.intake_policy(), IntakePolicy::Explicit);
+    }
+
+    #[test]
+    fn explicit_rejects_undeclared_enqueue() {
+        let mut s = Session::new(EchoEngine);
+        s.edit(|nb| nb.append(Cell::new_code("x".into())));
+        let id = s.notebook().cells()[0].id();
+        let err = s.enqueue(id).unwrap_err();
+        assert!(matches!(
+            err,
+            SessionError::UndeclaredDependencies { cell } if cell == id
+        ));
+        assert!(!s.dependencies_declared(&id));
+    }
+
+    #[test]
+    fn explicit_allows_after_empty_declaration() {
+        let mut s = Session::new(EchoEngine);
+        s.edit(|nb| nb.append(Cell::new_code("x".into())));
+        let id = s.notebook().cells()[0].id();
+        s.set_dependencies(id, []).unwrap();
+        assert!(s.dependencies_declared(&id));
+        s.enqueue(id).unwrap();
+        s.run_all();
+        assert_eq!(s.chrome(&id), CellChrome::Ready);
+    }
+
+    #[test]
+    fn inference_allows_undeclared_enqueue() {
+        let mut s = Session::new(EchoEngine);
+        s.set_intake_policy(IntakePolicy::Inference);
+        assert_eq!(s.intake_policy(), IntakePolicy::Inference);
+        s.edit(|nb| nb.append(Cell::new_code("x".into())));
+        let id = s.notebook().cells()[0].id();
+        assert!(!s.dependencies_declared(&id));
+        s.enqueue(id).unwrap();
+        s.run_all();
+        assert_eq!(s.chrome(&id), CellChrome::Ready);
+    }
+
+    #[test]
+    fn toggling_back_to_explicit_enforces_again() {
+        let mut s = Session::new(EchoEngine);
+        s.set_intake_policy(IntakePolicy::Inference);
+        s.edit(|nb| nb.append(Cell::new_code("x".into())));
+        let id = s.notebook().cells()[0].id();
+        s.enqueue(id).unwrap();
+        s.run_all();
+        s.set_intake_policy(IntakePolicy::Explicit);
+        // already declared? no — inference enqueue did not declare
+        let err = s.enqueue(id).unwrap_err();
+        assert!(matches!(err, SessionError::UndeclaredDependencies { .. }));
+        s.set_dependencies(id, []).unwrap();
+        s.enqueue(id).unwrap();
     }
 }
