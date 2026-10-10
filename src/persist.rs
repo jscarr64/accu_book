@@ -8,9 +8,10 @@
 
 use crate::{Cell, CellId, CellKind, IntakePolicy, Notebook};
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// Errors from reading or writing `.accu` files.
@@ -97,9 +98,8 @@ pub fn decode_notebook(text: &str) -> Result<Notebook, PersistError> {
         let line = take_line(bytes, &mut pos)?;
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("intake ") {
-            let policy = IntakePolicy::parse(rest).ok_or_else(|| {
-                PersistError::Format(format!("unknown intake `{rest}`"))
-            })?;
+            let policy = IntakePolicy::parse(rest)
+                .ok_or_else(|| PersistError::Format(format!("unknown intake `{rest}`")))?;
             nb.set_intake_policy(policy);
         } else {
             pos = save;
@@ -124,9 +124,7 @@ pub fn decode_notebook(text: &str) -> Result<Notebook, PersistError> {
         let line = take_line(bytes, &mut pos)?;
         let line = line.trim_end();
         let Some(id_str) = line.strip_prefix("CELL ") else {
-            return Err(PersistError::Format(format!(
-                "expected CELL, got `{line}`"
-            )));
+            return Err(PersistError::Format(format!("expected CELL, got `{line}`")));
         };
         let id_str = id_str.trim();
         let uuid = Uuid::parse_str(id_str)
@@ -173,11 +171,13 @@ pub fn decode_notebook(text: &str) -> Result<Notebook, PersistError> {
             )));
         };
         let len_str = len_str.trim();
-        let byte_len: usize = len_str.parse().map_err(|_| {
-            PersistError::Format(format!("bad SOURCE length `{len_str}`"))
-        })?;
+        let byte_len: usize = len_str
+            .parse()
+            .map_err(|_| PersistError::Format(format!("bad SOURCE length `{len_str}`")))?;
         if pos + byte_len > bytes.len() {
-            return Err(PersistError::Format("SOURCE length past end of file".into()));
+            return Err(PersistError::Format(
+                "SOURCE length past end of file".into(),
+            ));
         }
         let source = std::str::from_utf8(&bytes[pos..pos + byte_len])
             .map_err(|_| PersistError::Format("SOURCE is not valid UTF-8".into()))?
@@ -204,6 +204,10 @@ pub fn decode_notebook(text: &str) -> Result<Notebook, PersistError> {
 }
 
 /// Write `nb` to `path` as UTF-8 `.accu`.
+///
+/// The new text goes to a sibling temp file, which is fsynced, and that file
+/// is then renamed over `path`. A crash before the rename leaves the previous
+/// notebook in place. `File::create` on `path` would empty it first.
 pub fn save_notebook(path: &Path, nb: &Notebook) -> Result<(), PersistError> {
     let text = encode_notebook(nb);
     if let Some(parent) = path.parent() {
@@ -211,9 +215,58 @@ pub fn save_notebook(path: &Path, nb: &Notebook) -> Result<(), PersistError> {
             fs::create_dir_all(parent)?;
         }
     }
-    let mut f = fs::File::create(path)?;
-    f.write_all(text.as_bytes())?;
+    let tmp = temp_beside(path)?;
+    if let Err(err) = write_synced(&tmp, text.as_bytes()) {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
+    if let Err(err) = replace_file(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(PersistError::Io(err));
+    }
     Ok(())
+}
+
+fn temp_beside(path: &Path) -> Result<PathBuf, PersistError> {
+    let file_name = path.file_name().ok_or_else(|| {
+        PersistError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "notebook path has no file name",
+        ))
+    })?;
+    let mut name = OsString::from(file_name);
+    name.push(".");
+    name.push(Uuid::new_v4().simple().to_string());
+    name.push(".tmp");
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    Ok(match parent {
+        Some(parent) => parent.join(name),
+        None => PathBuf::from(name),
+    })
+}
+
+fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), PersistError> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
+    match fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        // Windows will not rename over a file that is already there.
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            fs::remove_file(to)?;
+            fs::rename(from, to)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Read a notebook from `path`.
@@ -253,6 +306,38 @@ mod tests {
         let nb2 = load_notebook(&path).expect("load");
         assert_eq!(nb, nb2);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replace_leaves_one_complete_file() {
+        let mut first = Notebook::new();
+        first.append(Cell::new_code("old".into()));
+        let mut second = Notebook::new();
+        second.append(Cell::new_code("new".into()));
+        let dir = std::env::temp_dir().join(format!("accu_persist_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("demo.accu");
+        save_notebook(&path, &first).expect("first");
+        let previous = fs::read(&path).expect("read previous");
+        save_notebook(&path, &second).expect("second");
+        let loaded = load_notebook(&path).expect("load");
+        assert_eq!(loaded, second);
+        assert_ne!(fs::read(&path).expect("read replaced"), previous);
+        let names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![OsString::from("demo.accu")]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_rejects_a_path_with_no_file_name() {
+        let err = save_notebook(Path::new("/"), &Notebook::new()).unwrap_err();
+        match err {
+            PersistError::Io(err) => assert_eq!(err.kind(), io::ErrorKind::InvalidInput),
+            PersistError::Format(_) => panic!("expected an i/o error"),
+        }
     }
 
     #[test]
