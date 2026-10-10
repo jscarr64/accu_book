@@ -104,13 +104,15 @@ intake explicit|inference
 
 CELL <uuid>
 KIND code|markdown
-META key value   # optional, repeatable; key has no spaces; value is one line
+META key value   # optional, repeatable; key has no space; value is one line
+METABYTES <key_len> <value_len>
+<key bytes><value bytes>   # key contains a space, or value contains a newline
 SOURCE <byte_len>
 ...exactly byte_len UTF-8 bytes of cell source...
 ENDCELL
 ```
 
-Source is length-prefixed so cell text may contain any UTF-8, including lines that look like delimiters.
+Source is length-prefixed so cell text may contain any UTF-8, including lines that look like delimiters. Line endings may be LF or CRLF. A duplicate cell id is rejected.
 
 APIs: `encode_notebook` / `decode_notebook`, `save_notebook` / `load_notebook`.
 Session results, job queue, and chrome are not written.

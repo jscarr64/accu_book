@@ -5,6 +5,9 @@
 //!
 //! Source bodies are length-prefixed (`SOURCE <byte_len>`) so cell text may
 //! contain any UTF-8, including lines that look like delimiters.
+//! Line endings may be `\n` or `\r\n`. A metadata pair that fits on one line
+//! is `META key value`. A key with a space, or a value with a newline, is
+//! length-prefixed as `METABYTES` so it round-trips.
 
 use crate::{Cell, CellId, CellKind, IntakePolicy, Notebook};
 use std::collections::BTreeMap;
@@ -45,12 +48,7 @@ pub fn encode_notebook(nb: &Notebook) -> String {
         });
         out.push('\n');
         for (k, v) in cell.metadata() {
-            // Keys must not contain spaces; values must be single-line (documented).
-            out.push_str("META ");
-            out.push_str(k);
-            out.push(' ');
-            out.push_str(v);
-            out.push('\n');
+            write_meta(&mut out, k, v);
         }
         let src = cell.source();
         out.push_str(&format!("SOURCE {}\n", src.len()));
@@ -75,9 +73,13 @@ pub fn decode_notebook(text: &str) -> Result<Notebook, PersistError> {
         while *pos < bytes.len() && bytes[*pos] != b'\n' {
             *pos += 1;
         }
-        let end = *pos;
+        let mut end = *pos;
         if *pos < bytes.len() && bytes[*pos] == b'\n' {
             *pos += 1;
+        }
+        // A CRLF terminator leaves the carriage return on the line.
+        if end > start && bytes[end - 1] == b'\r' {
+            end -= 1;
         }
         std::str::from_utf8(&bytes[start..end])
             .map_err(|_| PersistError::Format("non-UTF-8 line".into()))
@@ -152,7 +154,10 @@ pub fn decode_notebook(text: &str) -> Result<Notebook, PersistError> {
             }
             let save = pos;
             let peek = take_line(bytes, &mut pos)?;
-            if let Some(rest) = peek.strip_prefix("META ") {
+            if let Some(rest) = peek.strip_prefix("METABYTES ") {
+                let (k, v) = read_metabytes(bytes, &mut pos, rest)?;
+                metadata.insert(k, v);
+            } else if let Some(rest) = peek.strip_prefix("META ") {
                 let (k, v) = rest
                     .split_once(' ')
                     .ok_or_else(|| PersistError::Format("META needs key value".into()))?;
@@ -174,23 +179,8 @@ pub fn decode_notebook(text: &str) -> Result<Notebook, PersistError> {
         let byte_len: usize = len_str
             .parse()
             .map_err(|_| PersistError::Format(format!("bad SOURCE length `{len_str}`")))?;
-        if pos + byte_len > bytes.len() {
-            return Err(PersistError::Format(
-                "SOURCE length past end of file".into(),
-            ));
-        }
-        let source = std::str::from_utf8(&bytes[pos..pos + byte_len])
-            .map_err(|_| PersistError::Format("SOURCE is not valid UTF-8".into()))?
-            .to_string();
-        pos += byte_len;
-        // encoder always writes a trailing newline after the source bytes
-        if pos < bytes.len() && bytes[pos] == b'\n' {
-            pos += 1;
-        } else {
-            return Err(PersistError::Format(
-                "expected newline after SOURCE body".into(),
-            ));
-        }
+        let source = read_utf8(bytes, &mut pos, byte_len, "SOURCE")?;
+        expect_newline(bytes, &mut pos, "SOURCE body")?;
 
         let end = take_line(bytes, &mut pos)?;
         if end.trim() != "ENDCELL" {
@@ -199,8 +189,95 @@ pub fn decode_notebook(text: &str) -> Result<Notebook, PersistError> {
             )));
         }
 
+        if nb.get_by_id(&id).is_some() {
+            return Err(PersistError::Format(format!("duplicate cell id `{id}`")));
+        }
         nb.append(Cell::from_parts(id, kind, source, metadata));
     }
+}
+
+fn fits_meta_line(key: &str, value: &str) -> bool {
+    !key.is_empty() && !key.contains([' ', '\n', '\r']) && !value.contains(['\n', '\r'])
+}
+
+fn write_meta(out: &mut String, key: &str, value: &str) {
+    if fits_meta_line(key, value) {
+        out.push_str("META ");
+        out.push_str(key);
+        out.push(' ');
+        out.push_str(value);
+        out.push('\n');
+        return;
+    }
+    out.push_str("METABYTES ");
+    out.push_str(&key.len().to_string());
+    out.push(' ');
+    out.push_str(&value.len().to_string());
+    out.push('\n');
+    out.push_str(key);
+    out.push_str(value);
+    out.push('\n');
+}
+
+fn read_metabytes(
+    bytes: &[u8],
+    pos: &mut usize,
+    rest: &str,
+) -> Result<(String, String), PersistError> {
+    let mut parts = rest.split_whitespace();
+    let key_len = parse_usize(parts.next(), "METABYTES key length")?;
+    let value_len = parse_usize(parts.next(), "METABYTES value length")?;
+    if parts.next().is_some() {
+        return Err(PersistError::Format(format!(
+            "bad METABYTES header `{rest}`"
+        )));
+    }
+    let key = read_utf8(bytes, pos, key_len, "META key")?;
+    let value = read_utf8(bytes, pos, value_len, "META value")?;
+    expect_newline(bytes, pos, "METABYTES")?;
+    Ok((key, value))
+}
+
+fn parse_usize(text: Option<&str>, what: &str) -> Result<usize, PersistError> {
+    let text = text.ok_or_else(|| PersistError::Format(format!("missing {what}")))?;
+    text.parse()
+        .map_err(|_| PersistError::Format(format!("bad {what} `{text}`")))
+}
+
+fn read_utf8(
+    bytes: &[u8],
+    pos: &mut usize,
+    len: usize,
+    what: &str,
+) -> Result<String, PersistError> {
+    if pos.saturating_add(len) > bytes.len() {
+        return Err(PersistError::Format(format!(
+            "{what} length past end of file"
+        )));
+    }
+    let text = std::str::from_utf8(&bytes[*pos..*pos + len])
+        .map_err(|_| PersistError::Format(format!("{what} is not valid UTF-8")))?
+        .to_string();
+    *pos += len;
+    Ok(text)
+}
+
+fn expect_newline(bytes: &[u8], pos: &mut usize, what: &str) -> Result<(), PersistError> {
+    if *pos < bytes.len()
+        && bytes[*pos] == b'\r'
+        && *pos + 1 < bytes.len()
+        && bytes[*pos + 1] == b'\n'
+    {
+        *pos += 2;
+        return Ok(());
+    }
+    if *pos < bytes.len() && bytes[*pos] == b'\n' {
+        *pos += 1;
+        return Ok(());
+    }
+    Err(PersistError::Format(format!(
+        "expected newline after {what}"
+    )))
 }
 
 /// Write `nb` to `path` as UTF-8 `.accu`.
@@ -413,5 +490,61 @@ mod tests {
         let nb2 = decode_notebook(&text).expect("decode with delimiter collision payload");
         assert_eq!(nb2.get(0).unwrap().source(), body);
         assert_eq!(nb, nb2);
+    }
+
+    #[test]
+    fn crlf_file_loads() {
+        let mut nb = Notebook::new();
+        nb.append(Cell::new_code("x = 1".into()));
+        let text = encode_notebook(&nb).replace('\n', "\r\n");
+        let nb2 = decode_notebook(&text).expect("crlf");
+        assert_eq!(nb, nb2);
+
+        let id = nb2.get(0).unwrap().id();
+        let src = "a\nb";
+        let multiline = format!(
+            "accu 1\r\nintake explicit\r\n\r\nCELL {id}\r\nKIND code\r\nSOURCE {}\r\n{src}\r\nENDCELL\r\n",
+            src.len()
+        );
+        let nb3 = decode_notebook(&multiline).expect("crlf around a lf body");
+        assert_eq!(nb3.get(0).unwrap().source(), src);
+    }
+
+    #[test]
+    fn metadata_space_and_newline_round_trip() {
+        let mut nb = Notebook::new();
+        let cell = Cell::new_code("1".into());
+        let id = cell.id();
+        nb.append(cell);
+        let mut meta = BTreeMap::new();
+        meta.insert("title".into(), "hello world".into());
+        meta.insert("my key".into(), "hello\nworld".into());
+        nb.set_metadata(&id, meta).unwrap();
+        let text = encode_notebook(&nb);
+        assert!(text.contains("META title hello world\n"));
+        assert!(text.contains("METABYTES "));
+        let nb2 = decode_notebook(&text).expect("decode");
+        assert_eq!(nb, nb2);
+        assert_eq!(
+            nb2.get(0)
+                .unwrap()
+                .metadata()
+                .get("my key")
+                .map(String::as_str),
+            Some("hello\nworld")
+        );
+    }
+
+    #[test]
+    fn duplicate_cell_id_is_refused() {
+        let id = "00000000-0000-0000-0000-000000000001";
+        let text = format!(
+            "accu 1\nintake explicit\n\nCELL {id}\nKIND code\nSOURCE 1\nx\nENDCELL\n\nCELL {id}\nKIND code\nSOURCE 1\ny\nENDCELL\n"
+        );
+        let err = decode_notebook(&text).unwrap_err();
+        match err {
+            PersistError::Format(message) => assert!(message.contains("duplicate cell id")),
+            PersistError::Io(_) => panic!("expected a format error"),
+        }
     }
 }

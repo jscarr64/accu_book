@@ -55,11 +55,15 @@ intake explicit|inference
 
 CELL <uuid>
 KIND code|markdown
-META key value   # key: no spaces; value: one line
+META key value   # key: no space; value: one line
+METABYTES <key_len> <value_len>
+<key bytes><value bytes>   # key contains a space, or value contains a newline
 SOURCE <byte_len>
 <exactly byte_len UTF-8 bytes>
 ENDCELL
 ```
+
+Line endings may be LF or CRLF. A duplicate cell id is rejected. `META` records from 1.0.0 still load.
 
 ## Explicitly not public API
 
