@@ -7,8 +7,8 @@ use crate::engine::{eval_cell_with, EngineBridge, EngineError, EngineOp, EngineR
 use crate::history::History;
 use crate::jobs::{JobError, JobId, JobQueue};
 use crate::{cell_content_hash, CellId, IntakePolicy, Notebook};
-use std::fmt;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 /// Eval output kept by the session (not by the view).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +67,6 @@ impl ResultStore {
         self.by_cell.is_empty()
     }
 }
-
 
 /// Coarse cell chrome for UI (session is source of truth).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -441,7 +440,9 @@ mod tests {
         s.enqueue(id).unwrap();
         s.run_one().unwrap().1.unwrap();
         // Failed must win over graph stale after a real edit→enqueue→fail path
-        assert!(matches!(s.chrome(&id), CellChrome::Failed { message } if message.contains("unsupported")));
+        assert!(
+            matches!(s.chrome(&id), CellChrome::Failed { message } if message.contains("unsupported"))
+        );
         assert!(matches!(
             s.results().get(&id),
             Some(StoredOutput::Failure { .. })
@@ -603,7 +604,6 @@ mod tests {
         assert_eq!(s2.chrome(&id), CellChrome::Ready);
     }
 
-
     #[test]
     fn edit_purges_prior_bindings() {
         let mut s = Session::new(TrackingEngine::default());
@@ -612,7 +612,10 @@ mod tests {
         let id = s.notebook().cells()[0].id();
         s.enqueue(id).unwrap();
         s.run_all();
-        assert_eq!(s.cell_bindings(&id), Some(["bind:x".to_string()].as_slice()));
+        assert_eq!(
+            s.cell_bindings(&id),
+            Some(["bind:x".to_string()].as_slice())
+        );
         s.edit(|nb| {
             let id = nb.cells()[0].id();
             nb.set_source(&id, "y+1".into()).unwrap();
@@ -629,7 +632,10 @@ mod tests {
         let id = s.notebook().cells()[0].id();
         s.enqueue(id).unwrap();
         s.run_all();
-        assert_eq!(s.cell_bindings(&id), Some(["bind:a".to_string()].as_slice()));
+        assert_eq!(
+            s.cell_bindings(&id),
+            Some(["bind:a".to_string()].as_slice())
+        );
         s.edit(|nb| {
             let id = nb.cells()[0].id();
             nb.remove(&id).unwrap();
@@ -653,11 +659,13 @@ mod tests {
         s.set_dependencies(id, []).unwrap();
         s.enqueue(id).unwrap();
         s.run_all();
-        assert_eq!(s.cell_bindings(&id), Some(["bind:b".to_string()].as_slice()));
+        assert_eq!(
+            s.cell_bindings(&id),
+            Some(["bind:b".to_string()].as_slice())
+        );
         // purged on edit, and again at start of successful re-eval (empty then)
         assert!(s.engine().purged.iter().filter(|n| *n == "bind:a").count() >= 1);
     }
-
 
     /// Host chrome contract (S10): `chrome()` is the only status source for wrappers/CLI.
     #[test]
@@ -710,5 +718,4 @@ mod tests {
         assert!(matches!(sf.chrome(&fid), CellChrome::Failed { .. }));
         assert!(sf.chrome(&fid).to_string().starts_with("failed:"));
     }
-
 }

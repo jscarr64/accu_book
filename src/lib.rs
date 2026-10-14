@@ -1,16 +1,19 @@
-mod history;
 mod dag;
-mod jobs;
 mod engine;
-mod session;
+mod history;
+mod jobs;
 mod persist;
+mod session;
 
+pub use dag::{DepError, DepGraph};
+pub use engine::{
+    eval_cell_with, EchoEngine, EngineBridge, EngineError, EngineOp, EngineResult, NullEngine,
+    TrackingEngine,
+};
 pub use history::History;
-pub use dag::{DepGraph, DepError};
 pub use jobs::{Job, JobError, JobId, JobQueue, JobStatus};
-pub use engine::{EchoEngine, EngineBridge, EngineError, EngineOp, EngineResult, NullEngine, TrackingEngine, eval_cell_with};
-pub use session::{CellChrome, ResultStore, Session, SessionError, StoredOutput};
 pub use persist::{decode_notebook, encode_notebook, load_notebook, save_notebook, PersistError};
+pub use session::{CellChrome, ResultStore, Session, SessionError, StoredOutput};
 
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
@@ -38,7 +41,6 @@ impl CellId {
         self.0
     }
 }
-
 
 /// How undeclared cell dependencies are handled at enqueue time.
 ///
@@ -432,7 +434,10 @@ mod tests {
         nb.set_metadata(&id, meta).unwrap();
         assert_ne!(cell_before, cell_content_hash(&nb.cells()[0]));
         assert_ne!(nb_before, notebook_content_hash(&nb));
-        assert_eq!(nb.cells()[0].metadata().get("lang").map(String::as_str), Some("rust"));
+        assert_eq!(
+            nb.cells()[0].metadata().get("lang").map(String::as_str),
+            Some("rust")
+        );
     }
 
     #[test]

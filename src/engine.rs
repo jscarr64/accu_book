@@ -112,7 +112,6 @@ impl EngineBridge for EchoEngine {
     }
 }
 
-
 /// Test double that records purge calls and binds one name per non-empty source:
 /// `bind:<first_char>` (e.g. source `"x+1"` → `["bind:x"]`).
 #[derive(Debug, Default, Clone)]

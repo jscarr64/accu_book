@@ -107,9 +107,9 @@ impl JobQueue {
     }
 
     pub fn is_cell_queued(&self, cell: &CellId) -> bool {
-        self.jobs.values().any(|j| {
-            j.cell == *cell && matches!(j.status, JobStatus::Queued)
-        })
+        self.jobs
+            .values()
+            .any(|j| j.cell == *cell && matches!(j.status, JobStatus::Queued))
     }
 
     pub fn is_cell_running(&self, cell: &CellId) -> bool {
@@ -198,7 +198,10 @@ impl JobQueue {
         F: FnMut(CellId) -> Result<(), String>,
     {
         let (id, cell) = self.start_next()?;
-        if !matches!(self.jobs.get(&id).map(|j| &j.status), Some(JobStatus::Running)) {
+        if !matches!(
+            self.jobs.get(&id).map(|j| &j.status),
+            Some(JobStatus::Running)
+        ) {
             return Some((id, Err(JobError::NotRunning)));
         }
         let result = worker(cell);
@@ -303,11 +306,12 @@ mod tests {
         let mut q = JobQueue::new();
         let c = cell();
         let id = q.enqueue(c);
-        let (done, res) = q.run_one(|cell| {
-            assert_eq!(cell, c);
-            Ok(())
-        })
-        .unwrap();
+        let (done, res) = q
+            .run_one(|cell| {
+                assert_eq!(cell, c);
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(done, id);
         res.unwrap();
         assert_eq!(q.get(id).unwrap().status(), &JobStatus::Succeeded);
@@ -317,9 +321,7 @@ mod tests {
     fn run_one_worker_err() {
         let mut q = JobQueue::new();
         let id = q.enqueue(cell());
-        let (_, res) = q
-            .run_one(|_| Err("nope".into()))
-            .unwrap();
+        let (_, res) = q.run_one(|_| Err("nope".into())).unwrap();
         res.unwrap();
         assert!(matches!(
             q.get(id).unwrap().status(),

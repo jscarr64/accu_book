@@ -82,7 +82,8 @@ impl History {
         let Some(prev) = self.past.pop_back() else {
             return false;
         };
-        self.future.push_back(std::mem::replace(&mut self.present, prev));
+        self.future
+            .push_back(std::mem::replace(&mut self.present, prev));
         true
     }
 
@@ -90,7 +91,8 @@ impl History {
         let Some(next) = self.future.pop_back() else {
             return false;
         };
-        self.past.push_back(std::mem::replace(&mut self.present, next));
+        self.past
+            .push_back(std::mem::replace(&mut self.present, next));
         true
     }
 
