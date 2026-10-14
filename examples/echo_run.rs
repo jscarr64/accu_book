@@ -1,7 +1,5 @@
 //! Load/create a notebook, Explicit intake, run with EchoEngine, print chrome.
-use accu_book::{
-    save_notebook, Cell, CellChrome, EchoEngine, IntakePolicy, Session,
-};
+use accu_book::{save_notebook, Cell, CellChrome, EchoEngine, IntakePolicy, Session};
 use std::path::PathBuf;
 
 fn main() {

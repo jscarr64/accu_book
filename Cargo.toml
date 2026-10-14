@@ -1,7 +1,8 @@
 [package]
 name = "accu_book"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
+rust-version = "1.99"
 description = "Headless notebook (document, DAG, jobs, .accu persist) — Jupyter alternative without network kernels"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jscarr64/accu_book"
